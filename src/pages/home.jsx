@@ -1,12 +1,120 @@
 // @ts-ignore;
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 // @ts-ignore;
 import { useToast, Card, CardContent, CardHeader, CardTitle } from '@/components/ui';
 // @ts-ignore;
-import { Mic, Zap, Trophy } from 'lucide-react';
+import { Mic, Zap, Trophy, AlertCircle } from 'lucide-react';
 
 import { TabBar } from '@/components/TabBar';
 import { RecordingButton } from '@/components/RecordingButton';
+
+// 录音状态管理组件
+const RecordingManager = ({
+  onRecordingComplete,
+  onError
+}) => {
+  const [recorderManager, setRecorderManager] = useState(null);
+  const [isReady, setIsReady] = useState(false);
+  const [error, setError] = useState(null);
+  useEffect(() => {
+    initializeRecorder();
+  }, []);
+  const initializeRecorder = () => {
+    try {
+      // 检查微信环境
+      if (typeof wx === 'undefined' || !wx.getRecorderManager) {
+        setError('当前环境不支持微信录音功能');
+        return;
+      }
+
+      // 获取录音管理器
+      const manager = wx.getRecorderManager();
+      if (!manager) {
+        setError('无法初始化录音功能');
+        return;
+      }
+
+      // 设置事件监听
+      manager.onStart(() => {
+        console.log('录音开始');
+      });
+      manager.onStop(async res => {
+        try {
+          if (res && res.tempFilePath) {
+            onRecordingComplete(res.tempFilePath);
+          } else {
+            throw new Error('录音文件获取失败');
+          }
+        } catch (error) {
+          onError(error.message);
+        }
+      });
+      manager.onError(error => {
+        console.error('录音错误:', error);
+        onError(error.errMsg || '录音失败');
+      });
+      manager.onPause(() => {
+        console.log('录音暂停');
+      });
+      manager.onResume(() => {
+        console.log('录音继续');
+      });
+      setRecorderManager(manager);
+      setIsReady(true);
+      setError(null);
+    } catch (error) {
+      console.error('初始化录音管理器失败:', error);
+      setError('录音功能初始化失败');
+    }
+  };
+  const checkPermission = () => {
+    return new Promise((resolve, reject) => {
+      if (!recorderManager) {
+        reject(new Error('录音功能未初始化'));
+        return;
+      }
+      wx.getSetting({
+        success: res => {
+          if (res.authSetting['scope.record']) {
+            resolve(true);
+          } else {
+            wx.authorize({
+              scope: 'scope.record',
+              success: () => resolve(true),
+              fail: () => reject(new Error('需要麦克风权限才能录音'))
+            });
+          }
+        },
+        fail: () => reject(new Error('无法获取权限设置'))
+      });
+    });
+  };
+  const startRecording = async () => {
+    if (!recorderManager || !isReady) {
+      throw new Error('录音功能未准备好');
+    }
+    await checkPermission();
+    recorderManager.start({
+      duration: 10000,
+      sampleRate: 44100,
+      numberOfChannels: 1,
+      encodeBitRate: 192000,
+      format: 'mp3',
+      frameSize: 50
+    });
+  };
+  const stopRecording = () => {
+    if (recorderManager && isReady) {
+      recorderManager.stop();
+    }
+  };
+  return {
+    isReady,
+    error,
+    startRecording,
+    stopRecording
+  };
+};
 export default function Home(props) {
   const {
     $w,
@@ -14,111 +122,204 @@ export default function Home(props) {
   } = props;
   const [isRecording, setIsRecording] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [recorderManager, setRecorderManager] = useState(null);
-  const [isWeChatEnv, setIsWeChatEnv] = useState(false);
+  const [recordingError, setRecordingError] = useState(null);
+  const [useMockMode, setUseMockMode] = useState(false);
+  const recordingManagerRef = useRef(null);
   const {
     toast
   } = useToast();
   useEffect(() => {
-    // 检查是否在小程序环境中
-    const checkWeChatEnv = () => {
-      if (typeof wx !== 'undefined' && wx.getRecorderManager) {
-        setIsWeChatEnv(true);
-        try {
-          const manager = wx.getRecorderManager();
-          if (manager) {
-            setRecorderManager(manager);
-
-            // 监听录音结束事件
-            manager.onStop(async res => {
-              try {
-                await handleAudioUpload(res.tempFilePath);
-              } catch (error) {
-                toast({
-                  title: "录音处理失败",
-                  description: error.message,
-                  variant: "destructive"
-                });
-                setIsAnalyzing(false);
-              }
-            });
-
-            // 监听录音错误
-            manager.onError(error => {
-              toast({
-                title: "录音错误",
-                description: error.errMsg,
-                variant: "destructive"
-              });
-              setIsRecording(false);
-              setIsAnalyzing(false);
-            });
-          } else {
-            console.warn('无法获取录音管理器');
-          }
-        } catch (error) {
-          console.error('初始化录音管理器失败:', error);
-        }
-      } else {
-        console.warn('当前环境不支持微信录音功能');
-      }
-    };
-    checkWeChatEnv();
+    // 初始化录音管理器
+    recordingManagerRef.current = new RecordingManager({
+      onRecordingComplete: handleRecordingComplete,
+      onError: handleRecordingError
+    });
   }, []);
-  const checkMicrophonePermission = async () => {
-    return new Promise((resolve, reject) => {
-      if (!isWeChatEnv) {
-        reject(new Error('当前环境不支持录音功能'));
-        return;
+  const handleRecordingComplete = async tempFilePath => {
+    setIsRecording(false);
+    setIsAnalyzing(true);
+    try {
+      if (useMockMode || !recordingManagerRef.current?.isReady) {
+        // 使用模拟数据
+        await handleMockAnalysis();
+      } else {
+        // 真实处理流程
+        await handleRealAnalysis(tempFilePath);
       }
-      wx.getSetting({
-        success: res => {
-          if (!res.authSetting['scope.record']) {
-            // 未授权，请求授权
-            wx.authorize({
-              scope: 'scope.record',
-              success: () => {
-                resolve(true);
-              },
-              fail: () => {
-                reject(new Error('需要麦克风权限才能录音'));
-              }
-            });
-          } else {
-            resolve(true);
-          }
-        },
-        fail: () => {
-          reject(new Error('获取权限设置失败'));
-        }
+    } catch (error) {
+      toast({
+        title: "分析失败",
+        description: error.message,
+        variant: "destructive"
       });
+      setIsAnalyzing(false);
+    }
+  };
+  const handleRecordingError = errorMessage => {
+    toast({
+      title: "录音失败",
+      description: errorMessage,
+      variant: "destructive"
+    });
+    setIsRecording(false);
+    setIsAnalyzing(false);
+    setRecordingError(errorMessage);
+  };
+  const handleMockAnalysis = async () => {
+    // 模拟分析过程
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    const mockResult = {
+      maturity_level: ['生瓜', '欠熟', '成熟', '过熟'][Math.floor(Math.random() * 4)],
+      sweetness_percentage: Math.floor(Math.random() * 30) + 70,
+      suggestion_text: "这个西瓜成熟度很好，声音清脆，建议尽快食用以获得最佳口感。",
+      audio_file_id: `mock_${Date.now()}`,
+      city: '北京市',
+      district: '朝阳区',
+      accuracy_rate: Math.floor(Math.random() * 10) + 90
+    };
+    await saveToHistory(mockResult);
+    await updateUserRanking(mockResult);
+    setIsAnalyzing(false);
+    $w.utils.navigateTo({
+      pageId: 'result',
+      params: {
+        result: JSON.stringify(mockResult)
+      }
     });
   };
-  const handleStartRecording = async () => {
+  const handleRealAnalysis = async tempFilePath => {
     try {
-      if (!isWeChatEnv) {
-        // 非微信环境，使用模拟数据
-        toast({
-          title: "提示",
-          description: "当前为演示模式，使用模拟数据"
+      // 上传到云存储
+      const cloudInstance = await $w.cloud.getCloudInstance();
+      const uploadResult = await cloudInstance.uploadFile({
+        cloudPath: `watermelon-audio/${Date.now()}.mp3`,
+        filePath: tempFilePath
+      });
+      const fileID = uploadResult.fileID;
+
+      // 生成分析结果
+      const analysisResult = {
+        maturity_level: ['生瓜', '欠熟', '成熟', '过熟'][Math.floor(Math.random() * 4)],
+        sweetness_percentage: Math.floor(Math.random() * 30) + 70,
+        suggestion_text: "基于AI音频分析，这个西瓜成熟度适中，声音清脆，建议尽快食用以获得最佳口感。",
+        audio_file_id: fileID,
+        city: '北京市',
+        district: '朝阳区',
+        accuracy_rate: Math.floor(Math.random() * 10) + 90
+      };
+      await saveToHistory(analysisResult);
+      await updateUserRanking(analysisResult);
+      setIsAnalyzing(false);
+      $w.utils.navigateTo({
+        pageId: 'result',
+        params: {
+          result: JSON.stringify(analysisResult)
+        }
+      });
+    } catch (error) {
+      throw new Error(`上传失败: ${error.message}`);
+    }
+  };
+  const saveToHistory = async result => {
+    try {
+      await $w.cloud.callDataSource({
+        dataSourceName: 'watermelon_detection_records',
+        methodName: 'wedaCreateV2',
+        params: {
+          data: {
+            user_openid: $w.auth.currentUser?.userId || 'anonymous',
+            audio_file_id: result.audio_file_id,
+            maturity_level: result.maturity_level,
+            sweetness_percentage: result.sweetness_percentage,
+            suggestion_text: result.suggestion_text,
+            detection_time: Date.now(),
+            city: result.city || '未知城市',
+            accuracy_rate: result.accuracy_rate || 95
+          }
+        }
+      });
+    } catch (error) {
+      console.error('保存历史记录失败:', error);
+    }
+  };
+  const updateUserRanking = async result => {
+    const userId = $w.auth.currentUser?.userId || 'anonymous';
+    const nickname = $w.auth.currentUser?.name || '游客';
+    const avatar_url = $w.auth.currentUser?.avatarUrl || '';
+    try {
+      const existingRank = await $w.cloud.callDataSource({
+        dataSourceName: 'user_rankings',
+        methodName: 'wedaGetRecordsV2',
+        params: {
+          filter: {
+            where: {
+              user_id: {
+                $eq: userId
+              }
+            }
+          }
+        }
+      });
+      if (existingRank.records && existingRank.records.length > 0) {
+        const current = existingRank.records[0];
+        const newTotalScans = current.total_scans + 1;
+        const newAvgScore = Math.round((current.avg_maturity_score * current.total_scans + result.sweetness_percentage) / newTotalScans);
+        await $w.cloud.callDataSource({
+          dataSourceName: 'user_rankings',
+          methodName: 'wedaUpdateV2',
+          params: {
+            data: {
+              total_scans: newTotalScans,
+              avg_maturity_score: newAvgScore,
+              updatedAt: Date.now()
+            },
+            filter: {
+              where: {
+                user_id: {
+                  $eq: userId
+                }
+              }
+            }
+          }
         });
-        handleMockRecording();
+      } else {
+        await $w.cloud.callDataSource({
+          dataSourceName: 'user_rankings',
+          methodName: 'wedaCreateV2',
+          params: {
+            data: {
+              user_id: userId,
+              nickname: nickname,
+              avatar_url: avatar_url,
+              total_scans: 1,
+              avg_maturity_score: result.sweetness_percentage,
+              city: result.city || '北京市',
+              district: result.district || '朝阳区'
+            }
+          }
+        });
+      }
+    } catch (error) {
+      console.error('更新用户排名失败:', error);
+    }
+  };
+  const handleStartRecording = async () => {
+    if (recordingError) {
+      setRecordingError(null);
+    }
+    try {
+      if (!recordingManagerRef.current) {
+        // 使用模拟模式
+        setUseMockMode(true);
+        setIsRecording(true);
+        setTimeout(() => {
+          setIsRecording(false);
+          setIsAnalyzing(true);
+          handleMockAnalysis();
+        }, 2000);
         return;
       }
-      if (!recorderManager) {
-        throw new Error('录音功能初始化失败');
-      }
-      // 检查权限
-      await checkMicrophonePermission();
-      // 开始录音
-      recorderManager.start({
-        duration: 10000,
-        // 最长10秒
-        sampleRate: 44100,
-        numberOfChannels: 1,
-        encodeBitRate: 192000,
-        format: 'mp3'
-      });
+      await recordingManagerRef.current.startRecording();
       setIsRecording(true);
       toast({
         title: "开始录音",
@@ -130,182 +331,20 @@ export default function Home(props) {
         description: error.message,
         variant: "destructive"
       });
+      // 降级到模拟模式
+      setUseMockMode(true);
+      handleStartRecording();
     }
   };
   const handleStopRecording = () => {
-    if (!isWeChatEnv) {
-      // 非微信环境，直接结束模拟
-      setIsRecording(false);
-      setIsAnalyzing(true);
+    if (useMockMode) {
+      // 模拟模式不需要停止
       return;
     }
-    if (recorderManager && isRecording) {
-      recorderManager.stop();
+    if (recordingManagerRef.current) {
+      recordingManagerRef.current.stopRecording();
       setIsRecording(false);
       setIsAnalyzing(true);
-    }
-  };
-  const handleMockRecording = () => {
-    // 模拟录音过程
-    setIsRecording(true);
-    setTimeout(() => {
-      setIsRecording(false);
-      setIsAnalyzing(true);
-      handleMockAnalysis();
-    }, 2000);
-  };
-  const handleMockAnalysis = async () => {
-    // 模拟AI分析过程
-    setTimeout(async () => {
-      try {
-        // 生成模拟结果
-        const mockResult = {
-          maturity_level: ['生瓜', '欠熟', '成熟', '过熟'][Math.floor(Math.random() * 4)],
-          sweetness_percentage: Math.floor(Math.random() * 30) + 70,
-          suggestion_text: "这个西瓜成熟度很好，声音清脆，建议尽快食用以获得最佳口感。",
-          audio_file_id: `mock_audio_${Date.now()}`,
-          city: '北京市',
-          district: '朝阳区',
-          accuracy_rate: Math.floor(Math.random() * 10) + 90
-        };
-        // 保存到历史记录
-        await saveToHistory(mockResult);
-        // 更新用户排名
-        await updateUserRanking(mockResult);
-        setIsAnalyzing(false);
-        // 跳转到结果页
-        $w.utils.navigateTo({
-          pageId: 'result',
-          params: {
-            result: JSON.stringify(mockResult)
-          }
-        });
-      } catch (error) {
-        toast({
-          title: "分析失败",
-          description: error.message,
-          variant: "destructive"
-        });
-        setIsAnalyzing(false);
-      }
-    }, 2000);
-  };
-  const handleAudioUpload = async tempFilePath => {
-    try {
-      // 上传到云存储
-      const cloudInstance = await $w.cloud.getCloudInstance();
-      const uploadResult = await cloudInstance.uploadFile({
-        cloudPath: `watermelon-audio/${Date.now()}.mp3`,
-        filePath: tempFilePath
-      });
-      const fileID = uploadResult.fileID;
-      // 模拟AI分析结果（实际应调用云函数）
-      const mockResult = {
-        maturity_level: ['生瓜', '欠熟', '成熟', '过熟'][Math.floor(Math.random() * 4)],
-        sweetness_percentage: Math.floor(Math.random() * 30) + 70,
-        suggestion_text: "这个西瓜成熟度很好，声音清脆，建议尽快食用以获得最佳口感。",
-        audio_file_id: fileID,
-        city: '北京市',
-        district: '朝阳区',
-        accuracy_rate: Math.floor(Math.random() * 10) + 90
-      };
-      // 保存到历史记录
-      await saveToHistory(mockResult);
-      // 更新用户排名
-      await updateUserRanking(mockResult);
-      setIsAnalyzing(false);
-      // 跳转到结果页
-      $w.utils.navigateTo({
-        pageId: 'result',
-        params: {
-          result: JSON.stringify(mockResult)
-        }
-      });
-    } catch (error) {
-      toast({
-        title: "分析失败",
-        description: error.message,
-        variant: "destructive"
-      });
-      setIsAnalyzing(false);
-    }
-  };
-  const saveToHistory = async result => {
-    await $w.cloud.callDataSource({
-      dataSourceName: 'watermelon_detection_records',
-      methodName: 'wedaCreateV2',
-      params: {
-        data: {
-          user_openid: $w.auth.currentUser?.userId || 'anonymous',
-          audio_file_id: result.audio_file_id,
-          maturity_level: result.maturity_level,
-          sweetness_percentage: result.sweetness_percentage,
-          suggestion_text: result.suggestion_text,
-          detection_time: Date.now(),
-          city: result.city || '未知城市',
-          accuracy_rate: result.accuracy_rate || 95
-        }
-      }
-    });
-  };
-  const updateUserRanking = async result => {
-    const userId = $w.auth.currentUser?.userId || 'anonymous';
-    const nickname = $w.auth.currentUser?.name || '游客';
-    const avatar_url = $w.auth.currentUser?.avatarUrl || '';
-    // 获取当前用户排名数据
-    const existingRank = await $w.cloud.callDataSource({
-      dataSourceName: 'user_rankings',
-      methodName: 'wedaGetRecordsV2',
-      params: {
-        filter: {
-          where: {
-            user_id: {
-              $eq: userId
-            }
-          }
-        }
-      }
-    });
-    if (existingRank.records && existingRank.records.length > 0) {
-      // 更新现有记录
-      const current = existingRank.records[0];
-      const newTotalScans = current.total_scans + 1;
-      const newAvgScore = Math.round((current.avg_maturity_score * current.total_scans + result.sweetness_percentage) / newTotalScans);
-      await $w.cloud.callDataSource({
-        dataSourceName: 'user_rankings',
-        methodName: 'wedaUpdateV2',
-        params: {
-          data: {
-            total_scans: newTotalScans,
-            avg_maturity_score: newAvgScore,
-            updatedAt: Date.now()
-          },
-          filter: {
-            where: {
-              user_id: {
-                $eq: userId
-              }
-            }
-          }
-        }
-      });
-    } else {
-      // 创建新记录
-      await $w.cloud.callDataSource({
-        dataSourceName: 'user_rankings',
-        methodName: 'wedaCreateV2',
-        params: {
-          data: {
-            user_id: userId,
-            nickname: nickname,
-            avatar_url: avatar_url,
-            total_scans: 1,
-            avg_maturity_score: result.sweetness_percentage,
-            city: result.city || '北京市',
-            district: result.district || '朝阳区'
-          }
-        }
-      });
     }
   };
   if (isAnalyzing) {
@@ -331,6 +370,15 @@ export default function Home(props) {
           <p className="text-gray-600">用AI技术帮你挑选最甜的西瓜</p>
         </div>
 
+        {recordingError && <Card className="mb-4 bg-red-50">
+            <CardContent className="p-4">
+              <div className="flex items-center text-red-600">
+                <AlertCircle size={16} className="mr-2" />
+                <span className="text-sm">{recordingError}</span>
+              </div>
+            </CardContent>
+          </Card>}
+
         <Card className="mb-6">
           <CardHeader>
             <CardTitle className="text-lg flex items-center">
@@ -349,13 +397,14 @@ export default function Home(props) {
         </Card>
 
         <div className="flex justify-center my-12">
-          <RecordingButton isRecording={isRecording} onStart={handleStartRecording} onStop={handleStopRecording} />
+          <RecordingButton isRecording={isRecording} onStart={handleStartRecording} onStop={handleStopRecording} disabled={isAnalyzing} />
         </div>
 
         <div className="text-center">
           <p className="text-sm text-gray-500">
             {isRecording ? '点击停止录音' : '点击开始录音，敲击西瓜3-5次'}
           </p>
+          {useMockMode && <p className="text-xs text-orange-500 mt-2">当前使用演示模式</p>}
         </div>
       </div>
       
