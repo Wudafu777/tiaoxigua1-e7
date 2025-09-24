@@ -14,16 +14,92 @@ export default function Home(props) {
   } = props;
   const [isRecording, setIsRecording] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [recorderManager, setRecorderManager] = useState(null);
   const {
     toast
   } = useToast();
+  useEffect(() => {
+    // 初始化录音管理器
+    if (typeof wx !== 'undefined') {
+      const manager = wx.getRecorderManager();
+      setRecorderManager(manager);
+
+      // 监听录音结束事件
+      manager.onStop(async res => {
+        try {
+          await handleAudioUpload(res.tempFilePath);
+        } catch (error) {
+          toast({
+            title: "录音处理失败",
+            description: error.message,
+            variant: "destructive"
+          });
+          setIsAnalyzing(false);
+        }
+      });
+
+      // 监听录音错误
+      manager.onError(error => {
+        toast({
+          title: "录音错误",
+          description: error.errMsg,
+          variant: "destructive"
+        });
+        setIsRecording(false);
+        setIsAnalyzing(false);
+      });
+    }
+  }, []);
+  const checkMicrophonePermission = async () => {
+    return new Promise((resolve, reject) => {
+      if (typeof wx === 'undefined') {
+        reject(new Error('请在微信环境中使用'));
+        return;
+      }
+      wx.getSetting({
+        success: res => {
+          if (!res.authSetting['scope.record']) {
+            // 未授权，请求授权
+            wx.authorize({
+              scope: 'scope.record',
+              success: () => {
+                resolve(true);
+              },
+              fail: () => {
+                reject(new Error('需要麦克风权限才能录音'));
+              }
+            });
+          } else {
+            resolve(true);
+          }
+        },
+        fail: () => {
+          reject(new Error('获取权限设置失败'));
+        }
+      });
+    });
+  };
   const handleStartRecording = async () => {
     try {
-      setIsRecording(true);
-      toast({
-        title: "开始录音",
-        description: "请敲击西瓜3-5次"
-      });
+      // 检查权限
+      await checkMicrophonePermission();
+
+      // 开始录音
+      if (recorderManager) {
+        recorderManager.start({
+          duration: 10000,
+          // 最长10秒
+          sampleRate: 44100,
+          numberOfChannels: 1,
+          encodeBitRate: 192000,
+          format: 'mp3'
+        });
+        setIsRecording(true);
+        toast({
+          title: "开始录音",
+          description: "请敲击西瓜3-5次，录音最长10秒"
+        });
+      }
     } catch (error) {
       toast({
         title: "录音失败",
@@ -32,58 +108,71 @@ export default function Home(props) {
       });
     }
   };
-  const handleStopRecording = async () => {
-    setIsRecording(false);
-    setIsAnalyzing(true);
+  const handleStopRecording = () => {
+    if (recorderManager && isRecording) {
+      recorderManager.stop();
+      setIsRecording(false);
+      setIsAnalyzing(true);
+    }
+  };
+  const handleAudioUpload = async tempFilePath => {
+    try {
+      // 上传到云存储
+      const cloudInstance = await $w.cloud.getCloudInstance();
+      const uploadResult = await cloudInstance.uploadFile({
+        cloudPath: `watermelon-audio/${Date.now()}.mp3`,
+        filePath: tempFilePath
+      });
+      const fileID = uploadResult.fileID;
 
-    // 模拟AI分析过程
-    setTimeout(async () => {
-      try {
-        // 生成随机结果
-        const result = {
-          maturity_percentage: Math.floor(Math.random() * 30) + 70,
-          maturity_level: ['生瓜', '欠熟', '成熟', '过熟'][Math.floor(Math.random() * 4)],
-          advice: "这个西瓜成熟度很好，声音清脆，建议尽快食用以获得最佳口感。",
-          duration: 4,
-          timestamp: Date.now()
-        };
+      // 模拟AI分析结果（实际应调用云函数）
+      const mockResult = {
+        maturity_level: ['生瓜', '欠熟', '成熟', '过熟'][Math.floor(Math.random() * 4)],
+        sweetness_percentage: Math.floor(Math.random() * 30) + 70,
+        suggestion_text: "这个西瓜成熟度很好，声音清脆，建议尽快食用以获得最佳口感。",
+        audio_file_id: fileID,
+        city: '北京市',
+        district: '朝阳区',
+        accuracy_rate: Math.floor(Math.random() * 10) + 90
+      };
 
-        // 保存到历史记录
-        await saveToHistory(result);
+      // 保存到历史记录
+      await saveToHistory(mockResult);
 
-        // 更新用户排名数据
-        await updateUserRanking(result);
-        setIsAnalyzing(false);
+      // 更新用户排名
+      await updateUserRanking(mockResult);
+      setIsAnalyzing(false);
 
-        // 跳转到结果页
-        $w.utils.navigateTo({
-          pageId: 'result',
-          params: {
-            result: JSON.stringify(result)
-          }
-        });
-      } catch (error) {
-        toast({
-          title: "保存失败",
-          description: error.message,
-          variant: "destructive"
-        });
-        setIsAnalyzing(false);
-      }
-    }, 2000);
+      // 跳转到结果页
+      $w.utils.navigateTo({
+        pageId: 'result',
+        params: {
+          result: JSON.stringify(mockResult)
+        }
+      });
+    } catch (error) {
+      toast({
+        title: "分析失败",
+        description: error.message,
+        variant: "destructive"
+      });
+      setIsAnalyzing(false);
+    }
   };
   const saveToHistory = async result => {
     await $w.cloud.callDataSource({
-      dataSourceName: 'watermelon_analysis',
+      dataSourceName: 'watermelon_detection_records',
       methodName: 'wedaCreateV2',
       params: {
         data: {
-          maturity_percentage: result.maturity_percentage,
+          user_openid: $w.auth.currentUser?.userId || 'anonymous',
+          audio_file_id: result.audio_file_id,
           maturity_level: result.maturity_level,
-          advice: result.advice,
-          duration: result.duration,
-          user_id: $w.auth.currentUser?.userId || 'anonymous',
-          audio_url: `https://example.com/audio/${Date.now()}.wav`
+          sweetness_percentage: result.sweetness_percentage,
+          suggestion_text: result.suggestion_text,
+          detection_time: Date.now(),
+          city: result.city || '未知城市',
+          accuracy_rate: result.accuracy_rate || 95
         }
       }
     });
@@ -111,7 +200,7 @@ export default function Home(props) {
       // 更新现有记录
       const current = existingRank.records[0];
       const newTotalScans = current.total_scans + 1;
-      const newAvgScore = Math.round((current.avg_maturity_score * current.total_scans + result.maturity_percentage) / newTotalScans);
+      const newAvgScore = Math.round((current.avg_maturity_score * current.total_scans + result.sweetness_percentage) / newTotalScans);
       await $w.cloud.callDataSource({
         dataSourceName: 'user_rankings',
         methodName: 'wedaUpdateV2',
@@ -141,9 +230,9 @@ export default function Home(props) {
             nickname: nickname,
             avatar_url: avatar_url,
             total_scans: 1,
-            avg_maturity_score: result.maturity_percentage,
-            city: '北京市',
-            district: '朝阳区'
+            avg_maturity_score: result.sweetness_percentage,
+            city: result.city || '北京市',
+            district: result.district || '朝阳区'
           }
         }
       });

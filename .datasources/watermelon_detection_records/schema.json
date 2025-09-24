@@ -1,0 +1,49 @@
+
+{
+  "name": "watermelon_detection_records",
+  "title": "西瓜检测记录",
+  "schemas": [
+    {
+      "name": "user_openid",
+      "title": "用户OpenID",
+      "type": "String"
+    },
+    {
+      "name": "audio_file_id",
+      "title": "录音文件ID",
+      "type": "String"
+    },
+    {
+      "name": "maturity_level",
+      "title": "成熟度等级",
+      "type": "String"
+    },
+    {
+      "name": "sweetness_percentage",
+      "title": "甜度百分比",
+      "type": "Number"
+    },
+    {
+      "name": "suggestion_text",
+      "title": "建议文案",
+      "type": "MultiLineString"
+    },
+    {
+      "name": "detection_time",
+      "title": "检测时间",
+      "type": "DateTime",
+      "format": "timestamp-ms"
+    },
+    {
+      "name": "city",
+      "title": "所在城市",
+      "type": "String"
+    },
+    {
+      "name": "accuracy_rate",
+      "title": "准确率",
+      "type": "Number"
+    }
+  ]
+}
+  
