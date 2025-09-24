@@ -15,45 +15,60 @@ export default function Home(props) {
   const [isRecording, setIsRecording] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [recorderManager, setRecorderManager] = useState(null);
+  const [isWeChatEnv, setIsWeChatEnv] = useState(false);
   const {
     toast
   } = useToast();
   useEffect(() => {
-    // 初始化录音管理器
-    if (typeof wx !== 'undefined') {
-      const manager = wx.getRecorderManager();
-      setRecorderManager(manager);
-
-      // 监听录音结束事件
-      manager.onStop(async res => {
+    // 检查是否在小程序环境中
+    const checkWeChatEnv = () => {
+      if (typeof wx !== 'undefined' && wx.getRecorderManager) {
+        setIsWeChatEnv(true);
         try {
-          await handleAudioUpload(res.tempFilePath);
-        } catch (error) {
-          toast({
-            title: "录音处理失败",
-            description: error.message,
-            variant: "destructive"
-          });
-          setIsAnalyzing(false);
-        }
-      });
+          const manager = wx.getRecorderManager();
+          if (manager) {
+            setRecorderManager(manager);
 
-      // 监听录音错误
-      manager.onError(error => {
-        toast({
-          title: "录音错误",
-          description: error.errMsg,
-          variant: "destructive"
-        });
-        setIsRecording(false);
-        setIsAnalyzing(false);
-      });
-    }
+            // 监听录音结束事件
+            manager.onStop(async res => {
+              try {
+                await handleAudioUpload(res.tempFilePath);
+              } catch (error) {
+                toast({
+                  title: "录音处理失败",
+                  description: error.message,
+                  variant: "destructive"
+                });
+                setIsAnalyzing(false);
+              }
+            });
+
+            // 监听录音错误
+            manager.onError(error => {
+              toast({
+                title: "录音错误",
+                description: error.errMsg,
+                variant: "destructive"
+              });
+              setIsRecording(false);
+              setIsAnalyzing(false);
+            });
+          } else {
+            console.warn('无法获取录音管理器');
+          }
+        } catch (error) {
+          console.error('初始化录音管理器失败:', error);
+        }
+      } else {
+        console.warn('当前环境不支持微信录音功能');
+      }
+    };
+    checkWeChatEnv();
   }, []);
   const checkMicrophonePermission = async () => {
     return new Promise((resolve, reject) => {
-      if (typeof wx === 'undefined') {
-        reject(new Error('请在微信环境中使用'));
+      if (!isWeChatEnv) {
+        reject(new Error('当前环境不支持录音功能'));
         return;
       }
       wx.getSetting({
@@ -81,25 +96,34 @@ export default function Home(props) {
   };
   const handleStartRecording = async () => {
     try {
+      if (!isWeChatEnv) {
+        // 非微信环境，使用模拟数据
+        toast({
+          title: "提示",
+          description: "当前为演示模式，使用模拟数据"
+        });
+        handleMockRecording();
+        return;
+      }
+      if (!recorderManager) {
+        throw new Error('录音功能初始化失败');
+      }
       // 检查权限
       await checkMicrophonePermission();
-
       // 开始录音
-      if (recorderManager) {
-        recorderManager.start({
-          duration: 10000,
-          // 最长10秒
-          sampleRate: 44100,
-          numberOfChannels: 1,
-          encodeBitRate: 192000,
-          format: 'mp3'
-        });
-        setIsRecording(true);
-        toast({
-          title: "开始录音",
-          description: "请敲击西瓜3-5次，录音最长10秒"
-        });
-      }
+      recorderManager.start({
+        duration: 10000,
+        // 最长10秒
+        sampleRate: 44100,
+        numberOfChannels: 1,
+        encodeBitRate: 192000,
+        format: 'mp3'
+      });
+      setIsRecording(true);
+      toast({
+        title: "开始录音",
+        description: "请敲击西瓜3-5次，录音最长10秒"
+      });
     } catch (error) {
       toast({
         title: "录音失败",
@@ -109,11 +133,62 @@ export default function Home(props) {
     }
   };
   const handleStopRecording = () => {
+    if (!isWeChatEnv) {
+      // 非微信环境，直接结束模拟
+      setIsRecording(false);
+      setIsAnalyzing(true);
+      return;
+    }
     if (recorderManager && isRecording) {
       recorderManager.stop();
       setIsRecording(false);
       setIsAnalyzing(true);
     }
+  };
+  const handleMockRecording = () => {
+    // 模拟录音过程
+    setIsRecording(true);
+    setTimeout(() => {
+      setIsRecording(false);
+      setIsAnalyzing(true);
+      handleMockAnalysis();
+    }, 2000);
+  };
+  const handleMockAnalysis = async () => {
+    // 模拟AI分析过程
+    setTimeout(async () => {
+      try {
+        // 生成模拟结果
+        const mockResult = {
+          maturity_level: ['生瓜', '欠熟', '成熟', '过熟'][Math.floor(Math.random() * 4)],
+          sweetness_percentage: Math.floor(Math.random() * 30) + 70,
+          suggestion_text: "这个西瓜成熟度很好，声音清脆，建议尽快食用以获得最佳口感。",
+          audio_file_id: `mock_audio_${Date.now()}`,
+          city: '北京市',
+          district: '朝阳区',
+          accuracy_rate: Math.floor(Math.random() * 10) + 90
+        };
+        // 保存到历史记录
+        await saveToHistory(mockResult);
+        // 更新用户排名
+        await updateUserRanking(mockResult);
+        setIsAnalyzing(false);
+        // 跳转到结果页
+        $w.utils.navigateTo({
+          pageId: 'result',
+          params: {
+            result: JSON.stringify(mockResult)
+          }
+        });
+      } catch (error) {
+        toast({
+          title: "分析失败",
+          description: error.message,
+          variant: "destructive"
+        });
+        setIsAnalyzing(false);
+      }
+    }, 2000);
   };
   const handleAudioUpload = async tempFilePath => {
     try {
@@ -124,7 +199,6 @@ export default function Home(props) {
         filePath: tempFilePath
       });
       const fileID = uploadResult.fileID;
-
       // 模拟AI分析结果（实际应调用云函数）
       const mockResult = {
         maturity_level: ['生瓜', '欠熟', '成熟', '过熟'][Math.floor(Math.random() * 4)],
@@ -135,14 +209,11 @@ export default function Home(props) {
         district: '朝阳区',
         accuracy_rate: Math.floor(Math.random() * 10) + 90
       };
-
       // 保存到历史记录
       await saveToHistory(mockResult);
-
       // 更新用户排名
       await updateUserRanking(mockResult);
       setIsAnalyzing(false);
-
       // 跳转到结果页
       $w.utils.navigateTo({
         pageId: 'result',
@@ -181,7 +252,6 @@ export default function Home(props) {
     const userId = $w.auth.currentUser?.userId || 'anonymous';
     const nickname = $w.auth.currentUser?.name || '游客';
     const avatar_url = $w.auth.currentUser?.avatarUrl || '';
-
     // 获取当前用户排名数据
     const existingRank = await $w.cloud.callDataSource({
       dataSourceName: 'user_rankings',
