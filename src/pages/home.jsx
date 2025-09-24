@@ -1,72 +1,69 @@
 // @ts-ignore;
 import React, { useState, useEffect, useRef } from 'react';
 // @ts-ignore;
-import { useToast, Card, CardContent, CardHeader, CardTitle } from '@/components/ui';
+import { useToast, Card, CardContent, CardHeader, CardTitle, Button } from '@/components/ui';
 // @ts-ignore;
 import { Mic, Zap, Trophy, AlertCircle } from 'lucide-react';
 
 import { TabBar } from '@/components/TabBar';
 import { RecordingButton } from '@/components/RecordingButton';
 
-// 录音状态管理组件
-const RecordingManager = ({
-  onRecordingComplete,
-  onError
-}) => {
+// 录音管理 Hook
+const useRecordingManager = (onRecordingComplete, onError) => {
   const [recorderManager, setRecorderManager] = useState(null);
   const [isReady, setIsReady] = useState(false);
   const [error, setError] = useState(null);
+  const [isWeChatEnv, setIsWeChatEnv] = useState(false);
   useEffect(() => {
-    initializeRecorder();
-  }, []);
-  const initializeRecorder = () => {
-    try {
-      // 检查微信环境
-      if (typeof wx === 'undefined' || !wx.getRecorderManager) {
-        setError('当前环境不支持微信录音功能');
-        return;
-      }
-
-      // 获取录音管理器
-      const manager = wx.getRecorderManager();
-      if (!manager) {
-        setError('无法初始化录音功能');
-        return;
-      }
-
-      // 设置事件监听
-      manager.onStart(() => {
-        console.log('录音开始');
-      });
-      manager.onStop(async res => {
-        try {
-          if (res && res.tempFilePath) {
-            onRecordingComplete(res.tempFilePath);
-          } else {
-            throw new Error('录音文件获取失败');
-          }
-        } catch (error) {
-          onError(error.message);
+    const initializeRecorder = () => {
+      try {
+        // 检查微信环境
+        const isWeChat = typeof wx !== 'undefined' && wx.getRecorderManager;
+        setIsWeChatEnv(isWeChat);
+        if (!isWeChat) {
+          setError('当前环境不支持微信录音功能');
+          setIsReady(false);
+          return;
         }
-      });
-      manager.onError(error => {
-        console.error('录音错误:', error);
-        onError(error.errMsg || '录音失败');
-      });
-      manager.onPause(() => {
-        console.log('录音暂停');
-      });
-      manager.onResume(() => {
-        console.log('录音继续');
-      });
-      setRecorderManager(manager);
-      setIsReady(true);
-      setError(null);
-    } catch (error) {
-      console.error('初始化录音管理器失败:', error);
-      setError('录音功能初始化失败');
-    }
-  };
+
+        // 获取录音管理器
+        const manager = wx.getRecorderManager();
+        if (!manager) {
+          setError('无法初始化录音功能');
+          setIsReady(false);
+          return;
+        }
+
+        // 设置事件监听
+        manager.onStart(() => {
+          console.log('录音开始');
+        });
+        manager.onStop(async res => {
+          try {
+            if (res && res.tempFilePath) {
+              onRecordingComplete(res.tempFilePath);
+            } else {
+              throw new Error('录音文件获取失败');
+            }
+          } catch (error) {
+            onError(error.message);
+          }
+        });
+        manager.onError(error => {
+          console.error('录音错误:', error);
+          onError(error.errMsg || '录音失败');
+        });
+        setRecorderManager(manager);
+        setIsReady(true);
+        setError(null);
+      } catch (error) {
+        console.error('初始化录音管理器失败:', error);
+        setError('录音功能初始化失败');
+        setIsReady(false);
+      }
+    };
+    initializeRecorder();
+  }, [onRecordingComplete, onError]);
   const checkPermission = () => {
     return new Promise((resolve, reject) => {
       if (!recorderManager) {
@@ -110,116 +107,35 @@ const RecordingManager = ({
   };
   return {
     isReady,
+    isWeChatEnv,
     error,
     startRecording,
     stopRecording
   };
 };
-export default function Home(props) {
-  const {
-    $w,
-    style
-  } = props;
-  const [isRecording, setIsRecording] = useState(false);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [recordingError, setRecordingError] = useState(null);
-  const [useMockMode, setUseMockMode] = useState(false);
-  const recordingManagerRef = useRef(null);
-  const {
-    toast
-  } = useToast();
-  useEffect(() => {
-    // 初始化录音管理器
-    recordingManagerRef.current = new RecordingManager({
-      onRecordingComplete: handleRecordingComplete,
-      onError: handleRecordingError
-    });
-  }, []);
-  const handleRecordingComplete = async tempFilePath => {
-    setIsRecording(false);
-    setIsAnalyzing(true);
-    try {
-      if (useMockMode || !recordingManagerRef.current?.isReady) {
-        // 使用模拟数据
-        await handleMockAnalysis();
-      } else {
-        // 真实处理流程
-        await handleRealAnalysis(tempFilePath);
-      }
-    } catch (error) {
-      toast({
-        title: "分析失败",
-        description: error.message,
-        variant: "destructive"
-      });
-      setIsAnalyzing(false);
-    }
-  };
-  const handleRecordingError = errorMessage => {
-    toast({
-      title: "录音失败",
-      description: errorMessage,
-      variant: "destructive"
-    });
-    setIsRecording(false);
-    setIsAnalyzing(false);
-    setRecordingError(errorMessage);
-  };
-  const handleMockAnalysis = async () => {
-    // 模拟分析过程
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    const mockResult = {
-      maturity_level: ['生瓜', '欠熟', '成熟', '过熟'][Math.floor(Math.random() * 4)],
-      sweetness_percentage: Math.floor(Math.random() * 30) + 70,
-      suggestion_text: "这个西瓜成熟度很好，声音清脆，建议尽快食用以获得最佳口感。",
-      audio_file_id: `mock_${Date.now()}`,
-      city: '北京市',
-      district: '朝阳区',
-      accuracy_rate: Math.floor(Math.random() * 10) + 90
-    };
-    await saveToHistory(mockResult);
-    await updateUserRanking(mockResult);
-    setIsAnalyzing(false);
-    $w.utils.navigateTo({
-      pageId: 'result',
-      params: {
-        result: JSON.stringify(mockResult)
-      }
-    });
-  };
-  const handleRealAnalysis = async tempFilePath => {
-    try {
-      // 上传到云存储
-      const cloudInstance = await $w.cloud.getCloudInstance();
-      const uploadResult = await cloudInstance.uploadFile({
-        cloudPath: `watermelon-audio/${Date.now()}.mp3`,
-        filePath: tempFilePath
-      });
-      const fileID = uploadResult.fileID;
 
-      // 生成分析结果
-      const analysisResult = {
-        maturity_level: ['生瓜', '欠熟', '成熟', '过熟'][Math.floor(Math.random() * 4)],
-        sweetness_percentage: Math.floor(Math.random() * 30) + 70,
-        suggestion_text: "基于AI音频分析，这个西瓜成熟度适中，声音清脆，建议尽快食用以获得最佳口感。",
-        audio_file_id: fileID,
-        city: '北京市',
-        district: '朝阳区',
-        accuracy_rate: Math.floor(Math.random() * 10) + 90
-      };
-      await saveToHistory(analysisResult);
-      await updateUserRanking(analysisResult);
-      setIsAnalyzing(false);
-      $w.utils.navigateTo({
-        pageId: 'result',
-        params: {
-          result: JSON.stringify(analysisResult)
-        }
-      });
-    } catch (error) {
-      throw new Error(`上传失败: ${error.message}`);
-    }
+// 模拟录音 Hook
+const useMockRecording = onRecordingComplete => {
+  const [isMockRecording, setIsMockRecording] = useState(false);
+  const startMockRecording = () => {
+    setIsMockRecording(true);
+    setTimeout(() => {
+      setIsMockRecording(false);
+      onRecordingComplete('mock_audio_path');
+    }, 2000);
   };
+  const stopMockRecording = () => {
+    setIsMockRecording(false);
+  };
+  return {
+    isMockRecording,
+    startMockRecording,
+    stopMockRecording
+  };
+};
+
+// 数据保存 Hook
+const useDataOperations = () => {
   const saveToHistory = async result => {
     try {
       await $w.cloud.callDataSource({
@@ -240,6 +156,7 @@ export default function Home(props) {
       });
     } catch (error) {
       console.error('保存历史记录失败:', error);
+      throw error;
     }
   };
   const updateUserRanking = async result => {
@@ -301,6 +218,118 @@ export default function Home(props) {
       }
     } catch (error) {
       console.error('更新用户排名失败:', error);
+      throw error;
+    }
+  };
+  return {
+    saveToHistory,
+    updateUserRanking
+  };
+};
+export default function Home(props) {
+  const {
+    $w,
+    style
+  } = props;
+  const [isRecording, setIsRecording] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [recordingError, setRecordingError] = useState(null);
+  const [useMockMode, setUseMockMode] = useState(false);
+  const {
+    toast
+  } = useToast();
+
+  // 使用自定义 Hook
+  const {
+    saveToHistory,
+    updateUserRanking
+  } = useDataOperations();
+  const recordingManager = useRecordingManager(async tempFilePath => {
+    setIsRecording(false);
+    setIsAnalyzing(true);
+    try {
+      await handleRealAnalysis(tempFilePath);
+    } catch (error) {
+      toast({
+        title: "分析失败",
+        description: error.message,
+        variant: "destructive"
+      });
+      setIsAnalyzing(false);
+    }
+  }, errorMessage => {
+    toast({
+      title: "录音失败",
+      description: errorMessage,
+      variant: "destructive"
+    });
+    setIsRecording(false);
+    setIsAnalyzing(false);
+    setRecordingError(errorMessage);
+  });
+  const mockRecording = useMockRecording(async () => {
+    setIsRecording(false);
+    setIsAnalyzing(true);
+    await handleMockAnalysis();
+  });
+  const handleMockAnalysis = async () => {
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    const mockResult = {
+      maturity_level: ['生瓜', '欠熟', '成熟', '过熟'][Math.floor(Math.random() * 4)],
+      sweetness_percentage: Math.floor(Math.random() * 30) + 70,
+      suggestion_text: "这个西瓜成熟度很好，声音清脆，建议尽快食用以获得最佳口感。",
+      audio_file_id: `mock_${Date.now()}`,
+      city: '北京市',
+      district: '朝阳区',
+      accuracy_rate: Math.floor(Math.random() * 10) + 90
+    };
+    try {
+      await saveToHistory(mockResult);
+      await updateUserRanking(mockResult);
+      setIsAnalyzing(false);
+      $w.utils.navigateTo({
+        pageId: 'result',
+        params: {
+          result: JSON.stringify(mockResult)
+        }
+      });
+    } catch (error) {
+      toast({
+        title: "保存失败",
+        description: error.message,
+        variant: "destructive"
+      });
+      setIsAnalyzing(false);
+    }
+  };
+  const handleRealAnalysis = async tempFilePath => {
+    try {
+      const cloudInstance = await $w.cloud.getCloudInstance();
+      const uploadResult = await cloudInstance.uploadFile({
+        cloudPath: `watermelon-audio/${Date.now()}.mp3`,
+        filePath: tempFilePath
+      });
+      const fileID = uploadResult.fileID;
+      const analysisResult = {
+        maturity_level: ['生瓜', '欠熟', '成熟', '过熟'][Math.floor(Math.random() * 4)],
+        sweetness_percentage: Math.floor(Math.random() * 30) + 70,
+        suggestion_text: "基于AI音频分析，这个西瓜成熟度适中，声音清脆，建议尽快食用以获得最佳口感。",
+        audio_file_id: fileID,
+        city: '北京市',
+        district: '朝阳区',
+        accuracy_rate: Math.floor(Math.random() * 10) + 90
+      };
+      await saveToHistory(analysisResult);
+      await updateUserRanking(analysisResult);
+      setIsAnalyzing(false);
+      $w.utils.navigateTo({
+        pageId: 'result',
+        params: {
+          result: JSON.stringify(analysisResult)
+        }
+      });
+    } catch (error) {
+      throw new Error(`上传失败: ${error.message}`);
     }
   };
   const handleStartRecording = async () => {
@@ -308,18 +337,14 @@ export default function Home(props) {
       setRecordingError(null);
     }
     try {
-      if (!recordingManagerRef.current) {
+      if (!recordingManager.isReady || recordingManager.error) {
         // 使用模拟模式
         setUseMockMode(true);
+        mockRecording.startMockRecording();
         setIsRecording(true);
-        setTimeout(() => {
-          setIsRecording(false);
-          setIsAnalyzing(true);
-          handleMockAnalysis();
-        }, 2000);
         return;
       }
-      await recordingManagerRef.current.startRecording();
+      await recordingManager.startRecording();
       setIsRecording(true);
       toast({
         title: "开始录音",
@@ -333,16 +358,17 @@ export default function Home(props) {
       });
       // 降级到模拟模式
       setUseMockMode(true);
-      handleStartRecording();
+      mockRecording.startMockRecording();
+      setIsRecording(true);
     }
   };
   const handleStopRecording = () => {
     if (useMockMode) {
-      // 模拟模式不需要停止
+      mockRecording.stopMockRecording();
       return;
     }
-    if (recordingManagerRef.current) {
-      recordingManagerRef.current.stopRecording();
+    if (recordingManager.isReady) {
+      recordingManager.stopRecording();
       setIsRecording(false);
       setIsAnalyzing(true);
     }
@@ -375,6 +401,15 @@ export default function Home(props) {
               <div className="flex items-center text-red-600">
                 <AlertCircle size={16} className="mr-2" />
                 <span className="text-sm">{recordingError}</span>
+              </div>
+            </CardContent>
+          </Card>}
+
+        {!recordingManager.isReady && !useMockMode && <Card className="mb-4 bg-blue-50">
+            <CardContent className="p-4">
+              <div className="flex items-center text-blue-600">
+                <AlertCircle size={16} className="mr-2" />
+                <span className="text-sm">当前使用演示模式</span>
               </div>
             </CardContent>
           </Card>}
